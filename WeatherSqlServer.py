@@ -26,11 +26,20 @@ class WeatherSqlServer(SqlServer):
         return self.manual_query(query)
 
 
-    def select_metrics_by_date(self, start: datetime, finish: datetime):
-        """Получение метрик по дате и времени"""
+    def select_metrics(self, start: datetime, finish: datetime, city: str = None):
+        """Получение метрик по дате и времени \n
+        ----
+        ## Параметры
+        start: datetime
+            Начальный период выборки
+        finish: datetime
+            Конечный период выборки
+        city: str, optional
+            Город выборки
+        """
 
-        fields = ['LOCALTIME', 'Temperature', 'TemperatureMax', 'TemperatureMin', 'Pressure', 'Humidity',
-                   'WindSpeed', 'Сloudiness', 'HorizontalVisibility', 'TemperatureDewPoint', 'Precipitation']
+        fields = ['LOCALTIME', 'Temperature', 'Pressure', 'Humidity',
+                   'WindSpeed', 'Precipitation']
         for i in range(len(fields)):
             fields[i] = 'Metrics.' + fields[i]
         fields.append('WindDirections.Direction')
@@ -42,5 +51,13 @@ class WeatherSqlServer(SqlServer):
         WHERE Metrics.LocalTime BETWEEN '{1}' AND '{2}'
         ORDER BY Metrics.LocalTime
         """.format(', '.join(fields), start.strftime('%Y-%d-%m'), finish.strftime('%Y-%d-%m'))
+        
+        #если город был передан в качестве параметра, то вставляем это условие в запрос
+        if city != None:
+            index = query.find('ORDER')
+            query = query[:index] + f"AND Cities.City = '{city}'\n" + query[index:]
 
-        return self.manual_query(query)
+        df = self.manual_query(query)
+        #удаляем ненужные столбцы
+        # df.drop(columns=['ID', 'CityID', 'WindDirectionID'], inplace=True)
+        return df
