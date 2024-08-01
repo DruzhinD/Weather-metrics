@@ -1,4 +1,5 @@
 import pandas as pd
+import math
 import re
 from SqlServer_db import SqlServer
 from datetime import datetime
@@ -32,7 +33,7 @@ class Rp5Observer():
 
         #запуск
         driver = webdriver.Chrome(options=chrome_options, service=chrome_service)
-        # driver.minimize_window()
+        driver.maximize_window()
 
         sleep_time = 0.15
 
@@ -54,12 +55,16 @@ class Rp5Observer():
             time.sleep(sleep_time)
             
             #нажимаем на ссылку на архив
-            driver.find_element(By.CLASS_NAME, 'ArchiveStrLink').click()
+            # driver.find_element(By.CLASS_NAME, 'ArchiveStrLink').click()
+            driver.find_element(By.XPATH, "//a[contains(@href, 'Архив')]").click()
             time.sleep(sleep_time)
-
+            
             #нажимаем на раздел "скачать архив погоды"
             driver.find_element(By.XPATH, "// div[contains(text(), 'Скачать архив погоды')]").click()
-            time.sleep(sleep_time)
+            #обновляем страницу, чтобы информация отобразилась корректно
+            driver.refresh()
+            time.sleep(1)
+
             #ставим чекбокс в csv
             driver.find_element(By.XPATH, '//*[@id="toFileMenu"]/form/table[2]/tbody/tr[2]/td[3]/label/span').click()
             time.sleep(sleep_time)
@@ -79,7 +84,6 @@ class Rp5Observer():
             el2.send_keys(to_date.strftime('%d.%m.%Y'))
             time.sleep(sleep_time)
 
-
             #нажимаем на кнопку формирования архива
             download_el = driver.find_element(By.CLASS_NAME, 'download')
             download_el.find_element(By.CLASS_NAME, 'archButton').click()
@@ -87,18 +91,14 @@ class Rp5Observer():
 
             #нажимаем на кнопку скачивания
             button_tag = driver.find_element(By.ID, 'f_result')
-            time.sleep(sleep_time)
+            time.sleep(2) #ожидание появления кнопки
             link = button_tag.find_element(By.TAG_NAME, 'a').get_attribute('href')
             time.sleep(sleep_time)
-            # tag_with_link = driver.find_element(By.XPATH, "// span[contains(text(), 'Скачать')]")
-            # time.sleep(sleep_time)
-            # link = tag_with_link.get_attribute('href')
-            # time.sleep(sleep_time)
             
             driver.get(link)
             
             #время ожидания загрузки
-            await_time = (to_date - from_date).days * 0.1
+            await_time = (to_date - from_date).days * 0.05
             if await_time < 1:
                 await_time = 1
             time.sleep(await_time)
@@ -175,152 +175,171 @@ class Rp5Observer():
                 file.readline()
             #читаем заголовки
             headers = file.readline().strip().split(';')
+            
+            #удаляем заголовок, состоящий из пустой строки, если такой имеется
+            try:
+                empty_id = headers.index('')
+                headers.remove(headers[empty_id])
+            except ValueError:
+                pass
+
             for i in range(len(headers)):
                 headers[i] = headers[i].replace('"', '')
-            #пустой df с заголовками
-            dataframe = pd.DataFrame(columns=headers)
+            
+            #df из csv файла
+            csv_dataframe = pd.DataFrame(columns=headers)
 
+            #пустой df с заголовками
+            # dataframe = pd.DataFrame(columns=headers)
+
+            #заполнение dataframe из csv файла
             while True:
                 line = file.readline()[:-2] #не включает \n и последний разделитель ;
-                if line == "": break;
+                if line == "": break
                 splited_line = []
-                coma2 = 0
-                new_line = line
+                
+                #разделение полей по "", т.е. каждое поле находится в отдельных ""
                 while True:
-                    coma2 = new_line[1:].find('"')
-                    if coma2 == -1:
+                    #id кавычки
+                    coma = line[1:].find('"')
+                    if coma == -1:
                         break
                     else:
-                        splited_line.append(new_line[1: coma2+1])
-                        new_line = new_line[coma2+3:]
+                        #добавляем поле в список, не включая кавычки
+                        splited_line.append(line[1: coma+1])
+                        #обрезание строки, исключая только что добавленное в список поле
+                        line = line[coma+3:]
 
-                dataframe.loc[len(dataframe.index)] = splited_line     
+                csv_dataframe.loc[len(csv_dataframe.index)] = splited_line     
         # dataframe = pd.read_csv(csv_path, sep=';', header=7-1, encoding='utf-8', index_col=None) #cp1252
-
         print('Завершено чтение из файла') #отладка
-
-        #inplace: False - возвращает DataFrame (конструктор), True - изменяет текущий dataframe (модификатор)
-        #удаление ненужных полей
-        dataframe.drop(['P', 'Pa', 'ff10', 'ff3', 'WW', 'W1', 'W2', 'Cl', 'Nh', 'H', 'Cm', 'Ch', 'E', 'Tg', "E'", 'sss', 'tR'], #, 'E', 'Tg', "E'", 'sss', 'tR'
-                        axis=1, inplace=True)
-        rename_dict = {
-            dataframe.columns[0]: 'LocalTime',
-            'T': 'Temperature',
-            'Po': 'Pressure',
-            'U': 'Humidity',
-            'DD': 'WindDirectionID',
-            'Ff': 'WindSpeed',
-            'N': 'Cloudiness',
-            'Tn': 'TemperatureMin',
-            'Tx': 'TemperatureMax',
-            'VV': 'HorizontalVisibility',
-            'Td': 'TemperatureDewPoint',
-            'RRR': 'Precipitation'
-        }
-        #переименование полей
-        dataframe.rename(columns=rename_dict, inplace=True)
         
-        #приведение столбцов в числовой вид или изменение значений числового типа
-        #приведение поля cloudiness к числовому типу
-        cloudiness = dataframe['Cloudiness']
-        pattern = '\d+'
-        for i in range(cloudiness.size):
-            matches = re.findall(pattern, cloudiness.iloc[i].lower()) #поиск чисел
-            if len(matches) == 1:
-                cloudiness.iloc[i] = float(matches[0]) / 100
-            elif len(matches) == 2:
-                avg = sum(float(x) / (2*100) for x in matches)
-                cloudiness.iloc[i] = avg
-            elif cloudiness.iloc[i].lower().find('облаков нет') != -1:
-                cloudiness.iloc[i] = 0
-            else:
-                cloudiness.iloc[i] = 1
-        dataframe['Cloudiness'] = cloudiness
-        del cloudiness
+        dataframe = pd.DataFrame()
+        #заполняем возвращаемый dataframe
+        #вставка полей LocalTime, Temperature, Pressure
+        dataframe.insert(0, 'LocalTime', csv_dataframe.iloc[:, 0])
+        dataframe.insert(1, 'Temperature', csv_dataframe.iloc[:, 1])
+        dataframe.insert(2, 'Pressure', csv_dataframe.iloc[:, 2])
 
-        #приведение поля Precipitation
-        precipitation = dataframe['Precipitation']
-        for i in range(precipitation.size):
-            item = precipitation.iloc[i].lower()
-            if item == 'следы осадков':
-                precipitation.iloc[i] = 1
-            elif item == 'осадков нет':
-                precipitation.iloc[i] = 0
-        dataframe['Precipitation'] = precipitation
-        del precipitation
+        #строка, в которой хранится 1 запись из dataframe
+        first_row = csv_dataframe.iloc[0]
+        #id поля, в котором в последний раз были найдены нужные данные, чтобы в дальнейшнем начинать поиск с указанной позиции
+        last_found_id = 0
 
-        #приведение поля WindDirection
-        wind = dataframe['WindDirectionID']
-        pattern = f'север|восток|юг|запад|штиль'
-        for i in range(wind.size):
-            item = wind.iloc[i].lower()
-            matches = re.findall(pattern, item)
-            direction = ''.join(x[0] for x in matches).upper()
-            wind.iloc[i] = direction
-        dataframe['WindDirection'] = wind   
-        del wind
+        #ищем поле, соответствующее влажности формат: 000|00|00 в скопированной строке
+        for i in range(last_found_id, first_row.size):
+            value = str(first_row.iloc[i])
+            matches = re.findall('^\d{1,3}$', value)
+            if len(matches) > 0:
+                #вставляем Humidity (влажность) в dataframe
+                dataframe.insert(3, 'Humidity', csv_dataframe.iloc[:, i])
+                last_found_id = i
+                break
 
-        #приведение поля Humidity
-        humidity = dataframe['Humidity']
-        for i in range(humidity.size):
-            humidity.iloc[i] = float(humidity.iloc[i]) / 100
-        dataframe['Humidity'] = humidity
-        del humidity
+        #ищем поле, указывающее направление ветра (содержит либо Ветер либо Штиль)
+        for i in range(last_found_id, first_row.size):
+            value = str(first_row.iloc[i])
+            matches = re.findall('^Ветер|^Штиль', value)
+            if len(matches) > 0:
+                #вставляем WindDirection (направление ветра) в dataframe
+                dataframe.insert(4, 'WindDirectionID', csv_dataframe.iloc[:, i])
+                #вставляем WindSpeed (скорость ветра), т.к. это поле идет следующим
+                dataframe.insert(5, 'WindSpeed', csv_dataframe.iloc[:, i+1])
+                last_found_id = i+1
+                break
         
-        #приведение поля HorizontalView
-        hor = dataframe['HorizontalVisibility']
-        for i in range(hor.size):
-            item = hor.iloc[i]
+        #если в dataframe есть поле RRR (осадки), то забираем еще и их иначе, в выходном dataframe будет пустое поле
+        if 'RRR' in csv_dataframe.columns.values:
+            dataframe.insert(6, 'Precipitation', csv_dataframe['RRR'])
+        else:
+            dataframe.insert(6, 'Precipitation', [None]*dataframe.shape[0])
+
+        return self.__normalize_rp5_metrics_dataframe(dataframe, city)
+
+
+    def __normalize_rp5_metrics_dataframe(self, df: pd.DataFrame, city: str) -> pd.DataFrame:
+        """Приводит датафрейм в вид для дальнейшней обработки с корректными типами данных"""
+        #преобразование всех столбцов в наиболее подходящий тип данных
+        # csv_dataframe = csv_dataframe.convert_dtypes()
+        
+        #функция для приведения поля LocalTime
+        def parse_datetime(x: str) -> datetime:
+            dt = datetime.strptime(x, '%d.%m.%Y %H:%M')
+            return dt
+        #парсинг первого столбца с датами и конвертация в datetime
+        df['LocalTime'] = df['LocalTime'].apply(parse_datetime)
+
+        #вставляем поле с городом в столбец с индексом 1
+        df.insert(1, 'CityID', [city]*df.shape[0])
+
+        df['Temperature'] = df['Temperature'].apply(pd.to_numeric)
+        #выбираем все данные, в которых Temperature не равняется nan
+        for i, value in enumerate(df['Temperature']):
+            if math.isnan(value):
+                df.drop([i], inplace=True)
+        """сделать так, что записи с NaN не участвовали в выборке"""
+        df['Pressure'] = df['Pressure'].apply(pd.to_numeric)
+
+        #функция для приведения поля Humidity
+        def to_float_from_percentage(x: str) -> float:
             try:
-                hor.iloc[i] = float(item) * 1000
+                x = float(x)
+                return x / 100
+            except:
+                return None       
+        #приведение поля с влажностью Humidity к числу 0 < x < 1
+        df['Humidity'] = df['Humidity'].apply(to_float_from_percentage) #преобразование типа данных к числовому
+
+        #функция для приведения поля WindDirection
+        def parse_wind_directions(field_value: str) -> str:
+            pattern = f'север|восток|юг|запад|штиль'
+            #находим все совпадения
+            matches = re.findall(pattern, field_value.lower())
+            if len(matches) > 0:
+                direction = ''.join(x[0] for x in matches).upper()
+            else:
+                direction = 'С'
+            return direction
+        #приведение поля WindDirection
+        df['WindDirectionID'] = df['WindDirectionID'].apply(parse_wind_directions)
+    
+        df['WindSpeed'] = df['WindSpeed'].apply(pd.to_numeric)
+
+        #приводим поле осадков к требуемому виду
+        def parse_precipitation(x: str) -> float:
+            try:
+                return float(x)
             except Exception as ex:
-                # print(f'Возникло исключение при привидении HorizontalView') 
-                hor.iloc[i] = 0
-        dataframe['HorizontalView'] = hor
-        del hor
-        
-        #конвертация типов данных
-        #числовые типы
-        numeric_cols = [x for x in rename_dict.values()]
-        numeric_cols.remove('LocalTime')
-        numeric_cols.remove('WindDirectionID')
-        dataframe[numeric_cols] = dataframe[numeric_cols].apply(pd.to_numeric)
-        #дата
-        for i in range(dataframe.shape[0]):
-            dt = datetime.strptime(dataframe.at[i, 'LocalTime'], '%d.%m.%Y %H:%M')
-            dataframe.at[i, 'LocalTime'] = dt
-        
-        #строка
-        dataframe = dataframe.convert_dtypes()
+                if x != None:
+                    item = x.lower()
+                    if item.find('осадк') != -1:
+                        return 1
+                    else:
+                        return 0
+                else:
+                    return None
+            
+        df['Precipitation'] = df['Precipitation'].apply(parse_precipitation)
+        return df
+                
 
-        print('Завершено приведение данных в записях к виду для дальнейшней обработки.') #отладка
-        return [dataframe, city]
-
-
-    def normalize_rp5_metrics_dataframe(self, df: pd.DataFrame, city: str, db: SqlServer):
+    def normalize_metrics_to_database(self, df: pd.DataFrame, db: SqlServer) -> pd.DataFrame:
         """Приводит датафрейм метрик в вид для базы данных"""
+        
+        #получаем id городов
+        city_df = db.get_table_data('Cities')
+        city_list = city_df['City'].values
+        city_id_list = city_df['ID'].values
+        #заменяем названия городов на их id
+        df['CityID'].replace(city_list, city_id_list, inplace=True)
+        
+        #получаем id направлений сторон света
+        direction_df = db.get_table_data('WindDirections')
+        #формируем 2 списка значений со сторонами света
+        direction_list = direction_df['Direction'].values
+        direction_id_list = direction_df['ID'].values
+        #заменяем стороны света на их id
+        df['WindDirectionID'].replace(direction_list, direction_id_list, inplace=True)
+        print(df.head(15))
 
-        #получаем id города и добавляем соответствующий столбце в dataframe
-        city_df = db.manual_query("SELECT ID FROM Cities WHERE City = '{0}'".format(city))
-        city_id = city_df.iat[0, 0]
-        lst = [city_id] * df.shape[0]
-        df['CityID'] = lst
-        del city_df
-        #преобразуем направления ветра к числовым значениям
-        wind_df = db.get_table_data("WindDirections")
-        for i in range(df.shape[0]):
-            old = df.at[i, 'WindDirection']
-            for j in range(wind_df.shape[0]):
-                if old == str(wind_df.at[j, 'Direction']):
-                    df.at[i, 'WindDirection'] = str(wind_df.at[j, 'ID'])
-                    break 
-        df['WindDirection'] = df['WindDirection'].apply(pd.to_numeric)
-        del wind_df
-
-        #меняем порядок столбцов
-        new_df = df[['CityID', 'LocalTime', 'Temperature', 'TemperatureMax', 'TemperatureMin', 'Pressure',
-                'Humidity', 'WindDirection', 'WindSpeed', 'Cloudiness', 'HorizontalVisibility', 'TemperatureDewPoint', 'Precipitation']]
-        del df
-
-        print('завершена нормализация датафрейма') #отладка
-        return new_df
+        return df
